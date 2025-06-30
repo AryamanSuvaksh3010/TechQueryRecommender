@@ -1,0 +1,80 @@
+const Query = require('../models/queryModel');
+const Department = require('../models/departmentModel');
+const { CohereClient } = require("cohere-ai");
+
+const cohere = new CohereClient({
+  token: "xlaNlZPeRdRFhSzQdfgc3apVGHhODVRCtaxBDJlQ"
+});
+
+const createQuery = async (req, res) => {
+  const { queryText } = req.body;
+
+  try {
+    const response = await cohere.classify({
+      model: "92f46bf6-762d-4016-a0dd-0cd1873aea18-ft",
+      inputs: [queryText],
+      examples: []
+    });
+
+    const rawPrediction = response.classifications[0]?.prediction || "";
+    const predictionDepartmentName = rawPrediction.trim();
+
+    console.log("📝 Received queryText:", queryText);
+    console.log("🔮 Raw prediction from Cohere:", rawPrediction);
+    console.log("🧼 Trimmed prediction:", predictionDepartmentName);
+
+    const department = await Department.findOne({
+      name: { $regex: new RegExp(`^${predictionDepartmentName}$`, 'i') }
+    });
+
+    if (!department) {
+      console.log("❌ Department not found for prediction:", predictionDepartmentName);
+      const allDepartments = await Department.find({});
+      console.log("📦 All departments in DB:", allDepartments.map(d => d.name));
+      return res.status(400).json({ message: `No department found for "${predictionDepartmentName}"` });
+    }
+
+    const newQuery = new Query({ queryText });
+    await newQuery.save();
+
+    department.supportQueries.push(newQuery._id);
+    await department.save();
+
+    res.status(201).json({
+      message: 'Support query created successfully',
+      queryId: newQuery._id,
+      department
+    });
+  } catch (error) {
+    console.error("🔥 Error in createQuery:", error.message);
+    res.status(400).json({ error: error.message });
+  }
+};
+
+const deleteQuery = async (req, res) => {
+  const { queryId } = req.body;
+
+  try {
+    const query = await Query.findById(queryId);
+    if (!query) {
+      return res.status(404).json({ message: 'Query not found' });
+    }
+
+    await Query.findByIdAndDelete(queryId);
+
+    // Remove from department
+    const departments = await Department.find({ supportQueries: queryId });
+    for (const dept of departments) {
+      dept.supportQueries.pull(queryId);
+      await dept.save();
+    }
+
+    res.status(200).json({ message: 'Query deleted successfully' });
+  } catch (error) {
+    console.error("🔥 Error in deleteQuery:", error.message);
+    res.status(400).json({ error: error.message });
+  }
+};
+
+module.exports = { createQuery, deleteQuery };
+
