@@ -9,7 +9,11 @@ const queryRoutes = require('./routes/query')
 
 // express app
 const app = express()
-app.use(cors())
+app.use(cors({
+  origin: 'https://techqueryrecommender-1.onrender.com', // your frontend URL
+  methods: ['GET', 'POST', 'DELETE'],
+  credentials: false
+}));
 
 app.use(express.json())
 
