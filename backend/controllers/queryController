@@ -3,33 +3,49 @@ const Department = require('../models/departmentModel');
 const { CohereClient } = require("cohere-ai");
 
 const cohere = new CohereClient({
-  token: "xlaNlZPeRdRFhSzQdfgc3apVGHhODVRCtaxBDJlQ"
+  token: process.env.COHERE_API_KEY || "xlaNlZPeRdRFhSzQdfgc3apVGHhODVRCtaxBDJlQ"
 });
 
 const createQuery = async (req, res) => {
   const { queryText } = req.body;
 
   try {
-    const response = await cohere.classify({
-      model: "92f46bf6-762d-4016-a0dd-0cd1873aea18-ft",
-      inputs: [queryText],
-      examples: []
-    });
+    const allDepartments = await Department.find({});
+    const deptNames = [...new Set(allDepartments.map(d => d.name).filter(Boolean))];
 
-    const rawPrediction = response.classifications[0]?.prediction || "";
-    const predictionDepartmentName = rawPrediction.trim();
+    let predictionDepartmentName = "";
 
-    console.log("📝 Received queryText:", queryText);
-    console.log("🔮 Raw prediction from Cohere:", rawPrediction);
-    console.log("🧼 Trimmed prediction:", predictionDepartmentName);
+    if (deptNames.length > 0) {
+      const response = await cohere.chat({
+        message: `Classify this user support query into exactly one of the following department names: ${deptNames.join(', ')}. Return ONLY the exact department name from the list and nothing else.\n\nQuery: "${queryText}"`,
+      });
 
-    const department = await Department.findOne({
+      const rawPrediction = response.text || "";
+      predictionDepartmentName = rawPrediction.trim();
+
+      console.log("📝 Received queryText:", queryText);
+      console.log("🔮 Raw prediction from Cohere:", rawPrediction);
+      console.log("🧼 Trimmed prediction:", predictionDepartmentName);
+    }
+
+    let department = await Department.findOne({
       name: { $regex: new RegExp(`^${predictionDepartmentName}$`, 'i') }
     });
 
+    // Fallback in case Cohere added minor surrounding text or punctuation
+    if (!department && deptNames.length > 0) {
+      const matchedDept = deptNames.find(d =>
+        predictionDepartmentName.toLowerCase().includes(d.toLowerCase())
+      );
+      if (matchedDept) {
+        department = await Department.findOne({
+          name: { $regex: new RegExp(`^${matchedDept}$`, 'i') }
+        });
+      }
+    }
+
     if (!department) {
       console.log("❌ Department not found for prediction:", predictionDepartmentName);
-      const allDepartments = await Department.find({});
       console.log("📦 All departments in DB:", allDepartments.map(d => d.name));
       return res.status(400).json({ message: `No department found for "${predictionDepartmentName}"` });
     }
